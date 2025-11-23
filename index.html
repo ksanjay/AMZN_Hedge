@@ -1,111 +1,453 @@
-import pandas as pd
-import requests
-import matplotlib.pyplot as plt
-import io
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hedge Signal Terminal</title>
+    <script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #0d1117;
+            --card-bg: #161b22;
+            --text-color: #c9d1d9;
+            --accent-green: #238636;
+            --accent-red: #da3633;
+            --accent-yellow: #d29922;
+            --border: #30363d;
+        }
 
-# Configuration
-API_KEY = 'JQQUUJQRAX8TLXSM'
-TICKERS = ['QQQ', 'SPY', 'AMZN']
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
 
-def get_data(symbol):
-    """Fetch daily OHLC data from AlphaVantage"""
-    url = f'https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={symbol}&apikey={API_KEY}&outputsize=full&datatype=csv'
-    try:
-        response = requests.get(url)
-        # Parse CSV string into DataFrame
-        df = pd.read_csv(io.StringIO(response.content.decode('utf-8')))
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-        df = df.sort_values('timestamp').set_index('timestamp')
-        return df
-    except Exception as e:
-        print(f"Error fetching {symbol}: {e}")
-        return pd.DataFrame()
+        header {
+            width: 100%;
+            max-width: 1200px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 10px;
+        }
 
-def calculate_indicators(df):
-    """Calculate 50/200 MA, MACD, and RSI"""
-    # Moving Averages
-    df['50_MA'] = df['close'].rolling(window=50).mean()
-    df['200_MA'] = df['close'].rolling(window=200).mean()
+        h1 { margin: 0; font-size: 1.5rem; }
+        .controls { display: flex; gap: 10px; }
 
-    # MACD (12, 26, 9)
-    k = df['close'].ewm(span=12, adjust=False, min_periods=12).mean()
-    d = df['close'].ewm(span=26, adjust=False, min_periods=26).mean()
-    df['MACD'] = k - d
-    df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False, min_periods=9).mean()
-    df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
+        select, button {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border);
+            color: var(--text-color);
+            padding: 8px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 1rem;
+        }
 
-    # RSI (14)
-    delta = df['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / loss
-    df['RSI'] = 100 - (100 / (1 + rs))
-    
-    return df
+        button:hover { background-color: #21262d; }
 
-def generate_signal(df):
-    """Generate Hedge Signal based on latest data"""
-    last = df.iloc[-1]
-    
-    # Logic: Bearish if Price < 200MA or (Price < 50MA and MACD < Signal)
-    if last['close'] < last['200_MA']:
-        return "HEDGE ON (Trend Bearish)"
-    elif last['close'] < last['50_MA'] and last['MACD'] < last['MACD_Signal']:
-        return "HEDGE ON (Momentum Weak)"
-    elif last['close'] > last['200_MA'] and last['MACD'] > last['MACD_Signal']:
-        return "HEDGE OFF (Bullish)"
-    else:
-        return "NEUTRAL / CAUTION"
+        /* The Main Dashboard Grid */
+        .dashboard {
+            display: grid;
+            grid-template-columns: 250px 1fr; /* Signal Panel | Charts */
+            gap: 20px;
+            width: 100%;
+            max-width: 1200px;
+            height: 80vh;
+        }
 
-# Main Execution
-plt.style.use('dark_background')
+        /* Signal Panel (Left Side) */
+        .signal-panel {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
 
-for ticker in TICKERS:
-    print(f"Processing {ticker}...")
-    df = get_data(ticker)
-    
-    if df.empty:
-        continue
+        .signal-box {
+            border: 2px solid var(--border);
+            border-radius: 8px;
+            padding: 15px;
+            text-align: center;
+            background-color: rgba(255,255,255,0.05);
+        }
+
+        .signal-label { font-size: 0.9rem; text-transform: uppercase; color: #8b949e; margin-bottom: 5px; }
+        .signal-value { font-size: 1.4rem; font-weight: bold; }
+
+        .metric-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.9rem;
+            border-bottom: 1px solid var(--border);
+            padding: 8px 0;
+        }
+
+        /* Chart Area (Right Side) */
+        .chart-container {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 10px;
+            position: relative;
+        }
+
+        #chart-div { width: 100%; height: 100%; }
         
-    df = calculate_indicators(df)
-    
-    # Slice last 365 days for clearer visibility
-    plot_data = df.tail(365)
-    signal = generate_signal(plot_data)
-    
-    # Create Visual Graph
-    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 10), gridspec_kw={'height_ratios': [3, 1, 1]}, sharex=True)
-    
-    # Plot 1: Price & MAs
-    ax1.plot(plot_data.index, plot_data['close'], label='Price', color='white', linewidth=1)
-    ax1.plot(plot_data.index, plot_data['50_MA'], label='50 Day MA', color='cyan', alpha=0.8)
-    ax1.plot(plot_data.index, plot_data['200_MA'], label='200 Day MA', color='orange', alpha=0.8)
-    ax1.set_title(f"{ticker} - Hedge Signal Model", fontsize=14, fontweight='bold', color='white')
-    ax1.legend(loc='upper right')
-    
-    # Add Signal Recommendation to Top Left
-    color_code = 'red' if "ON" in signal else 'green' if "OFF" in signal else 'yellow'
-    ax1.text(0.02, 0.95, f"SIGNAL: {signal}", transform=ax1.transAxes, 
-             fontsize=12, fontweight='bold', color=color_code, 
-             bbox=dict(facecolor='black', alpha=0.7, edgecolor=color_code))
+        /* Utility classes for signal colors */
+        .text-red { color: var(--accent-red); }
+        .text-green { color: var(--accent-green); }
+        .text-yellow { color: var(--accent-yellow); }
+        .bg-red { background-color: rgba(218, 54, 51, 0.1); border-color: var(--accent-red); }
+        .bg-green { background-color: rgba(35, 134, 54, 0.1); border-color: var(--accent-green); }
+        .bg-yellow { background-color: rgba(210, 153, 34, 0.1); border-color: var(--accent-yellow); }
 
-    # Plot 2: MACD
-    ax2.plot(plot_data.index, plot_data['MACD'], label='MACD', color='lime')
-    ax2.plot(plot_data.index, plot_data['MACD_Signal'], label='Signal', color='red')
-    ax2.bar(plot_data.index, plot_data['MACD_Hist'], color='gray', alpha=0.3)
-    ax2.axhline(0, color='white', linewidth=0.5, alpha=0.5)
-    ax2.set_ylabel('MACD')
-    ax2.legend(loc='lower right', fontsize='small')
+        .loading { text-align: center; width: 100%; padding: 20px; display: none;}
 
-    # Plot 3: RSI
-    ax3.plot(plot_data.index, plot_data['RSI'], label='RSI (14)', color='yellow')
-    ax3.axhline(70, color='red', linestyle='--', alpha=0.5)
-    ax3.axhline(30, color='green', linestyle='--', alpha=0.5)
-    ax3.axhline(50, color='white', linestyle='-', alpha=0.3)
-    ax3.set_ylabel('RSI')
-    ax3.set_ylim(0, 100)
-    
-    plt.tight_layout()
-    plt.show()
+    </style>
+</head>
+<body>
 
-print("Hedge Signal Visuals Generated.")
+    <header>
+        <div>
+            <h1>HEDGE SIGNAL <span style="font-size:0.8rem; color:#888;">// ALPHA VANTAGE API</span></h1>
+        </div>
+        <div class="controls">
+            <select id="tickerSelect">
+                <option value="QQQ">QQQ (Nasdaq 100)</option>
+                <option value="SPY">SPY (S&P 500)</option>
+                <option value="AMZN">AMZN (Amazon)</option>
+            </select>
+            <button onclick="fetchData()">Analyze Data</button>
+        </div>
+    </header>
+
+    <div id="loading" class="loading">Fetching data and calculating indicators...</div>
+
+    <div class="dashboard" id="dashboard" style="opacity: 0.3;">
+        <aside class="signal-panel">
+            <div id="mainSignalBox" class="signal-box">
+                <div class="signal-label">Recommendation</div>
+                <div id="signalText" class="signal-value">WAITING...</div>
+            </div>
+
+            <div class="metric-row">
+                <span>Current Price</span>
+                <span id="priceVal">--</span>
+            </div>
+            <div class="metric-row">
+                <span>50 Day MA</span>
+                <span id="ma50Val">--</span>
+            </div>
+            <div class="metric-row">
+                <span>200 Day MA</span>
+                <span id="ma200Val">--</span>
+            </div>
+             <div class="metric-row">
+                <span>RSI (14)</span>
+                <span id="rsiVal">--</span>
+            </div>
+            <div class="metric-row">
+                <span>MACD</span>
+                <span id="macdVal">--</span>
+            </div>
+            
+            <div style="margin-top: 20px; font-size: 0.8rem; color: #8b949e;">
+                <strong>Logic:</strong><br>
+                HEDGE ON if Price < 200 SMA OR (Price < 50 SMA and MACD Bearish).
+            </div>
+        </aside>
+
+        <main class="chart-container">
+            <div id="chart-div"></div>
+        </main>
+    </div>
+
+    <script>
+        const API_KEY = 'JQQUUJQRAX8TLXSM'; 
+
+        // --- INDICATOR CALCULATION FUNCTIONS ---
+
+        function calculateSMA(data, period) {
+            let sma = new Array(data.length).fill(null);
+            for (let i = period - 1; i < data.length; i++) {
+                let sum = 0;
+                for (let j = 0; j < period; j++) {
+                    sum += data[i - j];
+                }
+                sma[i] = sum / period;
+            }
+            return sma;
+        }
+
+        function calculateEMA(data, period) {
+            let k = 2 / (period + 1);
+            let ema = new Array(data.length).fill(null);
+            // Start with SMA
+            let sum = 0;
+            for(let i=0; i<period; i++) sum += data[i];
+            ema[period-1] = sum / period;
+            
+            // Calculate EMA
+            for (let i = period; i < data.length; i++) {
+                ema[i] = (data[i] * k) + (ema[i - 1] * (1 - k));
+            }
+            return ema;
+        }
+
+        function calculateMACD(data, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9) {
+            const fastEMA = calculateEMA(data, fastPeriod);
+            const slowEMA = calculateEMA(data, slowPeriod);
+            let macdLine = new Array(data.length).fill(null);
+            
+            for(let i=0; i<data.length; i++) {
+                if(fastEMA[i] !== null && slowEMA[i] !== null) {
+                    macdLine[i] = fastEMA[i] - slowEMA[i];
+                }
+            }
+
+            // Calculate Signal Line (EMA of MACD Line)
+            // Filter out nulls for EMA calc, then map back
+            const validMacd = macdLine.filter(x => x !== null);
+            const signalLineRaw = calculateEMA(validMacd, signalPeriod);
+            
+            // Pad nulls back to match original length
+            let signalLine = new Array(data.length).fill(null);
+            let offset = data.length - validMacd.length;
+            for(let i=0; i<signalLineRaw.length; i++){
+                signalLine[i + offset] = signalLineRaw[i];
+            }
+
+            let histogram = new Array(data.length).fill(null);
+            for(let i=0; i<data.length; i++){
+                if(macdLine[i] !== null && signalLine[i] !== null){
+                    histogram[i] = macdLine[i] - signalLine[i];
+                }
+            }
+
+            return { macdLine, signalLine, histogram };
+        }
+
+        function calculateRSI(data, period = 14) {
+            let rsi = new Array(data.length).fill(null);
+            let gains = 0;
+            let losses = 0;
+
+            // First average
+            for (let i = 1; i <= period; i++) {
+                let change = data[i] - data[i - 1];
+                if (change > 0) gains += change;
+                else losses += Math.abs(change);
+            }
+            
+            let avgGain = gains / period;
+            let avgLoss = losses / period;
+            
+            rsi[period] = 100 - (100 / (1 + (avgGain / avgLoss)));
+
+            // Smoothed averages
+            for (let i = period + 1; i < data.length; i++) {
+                let change = data[i] - data[i - 1];
+                let gain = change > 0 ? change : 0;
+                let loss = change < 0 ? Math.abs(change) : 0;
+
+                avgGain = ((avgGain * (period - 1)) + gain) / period;
+                avgLoss = ((avgLoss * (period - 1)) + loss) / period;
+
+                let rs = avgGain / avgLoss;
+                rsi[i] = 100 - (100 / (1 + rs));
+            }
+            return rsi;
+        }
+
+        // --- MAIN APP LOGIC ---
+
+        async function fetchData() {
+            const ticker = document.getElementById('tickerSelect').value;
+            const loading = document.getElementById('loading');
+            const dashboard = document.getElementById('dashboard');
+
+            loading.style.display = 'block';
+            dashboard.style.opacity = '0.3';
+
+            const url = `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${ticker}&apikey=${API_KEY}&datatype=csv&outputsize=full`;
+
+            try {
+                const response = await fetch(url);
+                const text = await response.text();
+
+                // Parse CSV
+                const rows = text.split('\n').slice(1); // Remove header
+                let dates = [], closes = [], opens = [], highs = [], lows = [];
+
+                // Loop backwards because AlphaVantage sends newest first, charts need oldest first
+                for (let i = rows.length - 2; i >= 0; i--) { 
+                    const row = rows[i].split(',');
+                    if (row.length < 5) continue;
+                    dates.push(row[0]);
+                    opens.push(parseFloat(row[1]));
+                    highs.push(parseFloat(row[2]));
+                    lows.push(parseFloat(row[3]));
+                    closes.push(parseFloat(row[4]));
+                }
+
+                if (closes.length === 0) {
+                    alert("API Limit Reached or No Data. Please wait a minute and try again.");
+                    loading.style.display = 'none';
+                    dashboard.style.opacity = '1';
+                    return;
+                }
+
+                // Calculate Indicators
+                const ma50 = calculateSMA(closes, 50);
+                const ma200 = calculateSMA(closes, 200);
+                const rsi = calculateRSI(closes, 14);
+                const macdData = calculateMACD(closes, 12, 26, 9);
+
+                // Generate Signal
+                const currentPrice = closes[closes.length - 1];
+                const current50 = ma50[ma50.length - 1];
+                const current200 = ma200[ma200.length - 1];
+                const currentMACD = macdData.macdLine[macdData.macdLine.length - 1];
+                const currentSignal = macdData.signalLine[macdData.signalLine.length - 1];
+                const currentRSI = rsi[rsi.length - 1];
+
+                updateUI(ticker, currentPrice, current50, current200, currentMACD, currentSignal, currentRSI);
+                
+                renderChart(dates, opens, highs, lows, closes, ma50, ma200, rsi, macdData, ticker);
+
+            } catch (error) {
+                console.error(error);
+                alert("Error fetching data.");
+            } finally {
+                loading.style.display = 'none';
+                dashboard.style.opacity = '1';
+            }
+        }
+
+        function updateUI(ticker, price, ma50, ma200, macd, macdSig, rsi) {
+            // --- HEDGE SIGNAL LOGIC ---
+            // Logic: 
+            // 1. Price < 200 MA -> HEDGE ON (Trend Bearish)
+            // 2. Price < 50 MA AND MACD < Signal -> HEDGE ON (Momentum Weak)
+            // 3. Price > 200 AND MACD > Signal -> HEDGE OFF (Bullish)
+            
+            let signalText = "";
+            let boxClass = "";
+            let textColor = "";
+
+            if (price < ma200) {
+                signalText = "HEDGE ON (Trend)";
+                boxClass = "bg-red";
+                textColor = "text-red";
+            } else if (price < ma50 && macd < macdSig) {
+                signalText = "HEDGE ON (Momentum)";
+                boxClass = "bg-red";
+                textColor = "text-red";
+            } else if (price > ma200 && macd > macdSig) {
+                signalText = "HEDGE OFF";
+                boxClass = "bg-green";
+                textColor = "text-green";
+            } else {
+                signalText = "CAUTION / NEUTRAL";
+                boxClass = "bg-yellow";
+                textColor = "text-yellow";
+            }
+
+            const signalBox = document.getElementById('mainSignalBox');
+            const signalDiv = document.getElementById('signalText');
+
+            signalBox.className = `signal-box ${boxClass}`;
+            signalDiv.className = `signal-value ${textColor}`;
+            signalDiv.innerText = signalText;
+
+            document.getElementById('priceVal').innerText = price.toFixed(2);
+            document.getElementById('ma50Val').innerText = ma50.toFixed(2);
+            document.getElementById('ma200Val').innerText = ma200.toFixed(2);
+            document.getElementById('rsiVal').innerText = rsi.toFixed(2);
+            document.getElementById('macdVal').innerText = macd.toFixed(2);
+        }
+
+        function renderChart(dates, open, high, low, close, ma50, ma200, rsi, macdData, ticker) {
+            
+            // We slice the data to show only the last 365 trading days (approx 1.5 years) for readability
+            const sliceIndex = dates.length > 365 ? dates.length - 365 : 0;
+            
+            // Helper to slice arrays
+            const s = (arr) => arr.slice(sliceIndex);
+
+            const traceCandle = {
+                x: s(dates), close: s(close), high: s(high), low: s(low), open: s(open),
+                type: 'candlestick', name: ticker,
+                increasing: {line: {color: '#238636'}}, decreasing: {line: {color: '#da3633'}}
+            };
+
+            const trace50 = {
+                x: s(dates), y: s(ma50), type: 'scatter', mode: 'lines', name: '50 SMA',
+                line: {color: 'cyan', width: 1}
+            };
+
+            const trace200 = {
+                x: s(dates), y: s(ma200), type: 'scatter', mode: 'lines', name: '200 SMA',
+                line: {color: 'orange', width: 1}
+            };
+
+            const traceMACD = {
+                x: s(dates), y: s(macdData.macdLine), type: 'scatter', mode: 'lines', name: 'MACD',
+                xaxis: 'x', yaxis: 'y2', line: {color: 'lime', width: 1}
+            };
+            
+            const traceSignal = {
+                x: s(dates), y: s(macdData.signalLine), type: 'scatter', mode: 'lines', name: 'Signal',
+                xaxis: 'x', yaxis: 'y2', line: {color: 'red', width: 1}
+            };
+
+            const traceHist = {
+                x: s(dates), y: s(macdData.histogram), type: 'bar', name: 'Hist',
+                xaxis: 'x', yaxis: 'y2', marker: {color: 'gray', opacity: 0.3}
+            };
+
+            const traceRSI = {
+                x: s(dates), y: s(rsi), type: 'scatter', mode: 'lines', name: 'RSI',
+                xaxis: 'x', yaxis: 'y3', line: {color: 'yellow', width: 1}
+            };
+
+            const layout = {
+                dragmode: 'zoom',
+                showlegend: false,
+                grid: {rows: 3, columns: 1, pattern: 'independent', roworder: 'top to bottom'},
+                height: 700,
+                paper_bgcolor: '#161b22',
+                plot_bgcolor: '#161b22',
+                font: { color: '#c9d1d9' },
+                xaxis: { rangeslider: { visible: false }, showgrid: false },
+                yaxis: { domain: [0.45, 1], title: 'Price', gridcolor: '#30363d' },
+                yaxis2: { domain: [0.25, 0.4], title: 'MACD', gridcolor: '#30363d' },
+                yaxis3: { domain: [0, 0.2], title: 'RSI', range: [0, 100], gridcolor: '#30363d' },
+                shapes: [
+                    // RSI lines
+                    { type: 'line', xref: 'x', yref: 'y3', x0: s(dates)[0], x1: s(dates)[s(dates).length-1], y0: 70, y1: 70, line: {color: 'red', width: 1, dash: 'dot'}},
+                    { type: 'line', xref: 'x', yref: 'y3', x0: s(dates)[0], x1: s(dates)[s(dates).length-1], y0: 30, y1: 30, line: {color: 'green', width: 1, dash: 'dot'}},
+                    { type: 'line', xref: 'x', yref: 'y3', x0: s(dates)[0], x1: s(dates)[s(dates).length-1], y0: 50, y1: 50, line: {color: 'white', width: 0.5}}
+                ]
+            };
+
+            Plotly.newPlot('chart-div', [traceCandle, trace50, trace200, traceMACD, traceSignal, traceHist, traceRSI], layout, {responsive: true});
+        }
+
+        // Initial Load
+        fetchData();
+
+    </script>
+</body>
+</html>
