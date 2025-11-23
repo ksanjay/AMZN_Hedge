@@ -1,0 +1,111 @@
+import pandas as pd
+import requests
+import matplotlib.pyplot as plt
+import io
+
+# Configuration
+API_KEY = 'JQQUUJQRAX8TLXSM'
+TICKERS = ['QQQ', 'SPY', 'AMZN']
+
+def get_data(symbol):
+    """Fetch daily OHLC data from AlphaVantage"""
+    url = f'https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={symbol}&apikey={API_KEY}&outputsize=full&datatype=csv'
+    try:
+        response = requests.get(url)
+        # Parse CSV string into DataFrame
+        df = pd.read_csv(io.StringIO(response.content.decode('utf-8')))
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        df = df.sort_values('timestamp').set_index('timestamp')
+        return df
+    except Exception as e:
+        print(f"Error fetching {symbol}: {e}")
+        return pd.DataFrame()
+
+def calculate_indicators(df):
+    """Calculate 50/200 MA, MACD, and RSI"""
+    # Moving Averages
+    df['50_MA'] = df['close'].rolling(window=50).mean()
+    df['200_MA'] = df['close'].rolling(window=200).mean()
+
+    # MACD (12, 26, 9)
+    k = df['close'].ewm(span=12, adjust=False, min_periods=12).mean()
+    d = df['close'].ewm(span=26, adjust=False, min_periods=26).mean()
+    df['MACD'] = k - d
+    df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False, min_periods=9).mean()
+    df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
+
+    # RSI (14)
+    delta = df['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+    
+    return df
+
+def generate_signal(df):
+    """Generate Hedge Signal based on latest data"""
+    last = df.iloc[-1]
+    
+    # Logic: Bearish if Price < 200MA or (Price < 50MA and MACD < Signal)
+    if last['close'] < last['200_MA']:
+        return "HEDGE ON (Trend Bearish)"
+    elif last['close'] < last['50_MA'] and last['MACD'] < last['MACD_Signal']:
+        return "HEDGE ON (Momentum Weak)"
+    elif last['close'] > last['200_MA'] and last['MACD'] > last['MACD_Signal']:
+        return "HEDGE OFF (Bullish)"
+    else:
+        return "NEUTRAL / CAUTION"
+
+# Main Execution
+plt.style.use('dark_background')
+
+for ticker in TICKERS:
+    print(f"Processing {ticker}...")
+    df = get_data(ticker)
+    
+    if df.empty:
+        continue
+        
+    df = calculate_indicators(df)
+    
+    # Slice last 365 days for clearer visibility
+    plot_data = df.tail(365)
+    signal = generate_signal(plot_data)
+    
+    # Create Visual Graph
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 10), gridspec_kw={'height_ratios': [3, 1, 1]}, sharex=True)
+    
+    # Plot 1: Price & MAs
+    ax1.plot(plot_data.index, plot_data['close'], label='Price', color='white', linewidth=1)
+    ax1.plot(plot_data.index, plot_data['50_MA'], label='50 Day MA', color='cyan', alpha=0.8)
+    ax1.plot(plot_data.index, plot_data['200_MA'], label='200 Day MA', color='orange', alpha=0.8)
+    ax1.set_title(f"{ticker} - Hedge Signal Model", fontsize=14, fontweight='bold', color='white')
+    ax1.legend(loc='upper right')
+    
+    # Add Signal Recommendation to Top Left
+    color_code = 'red' if "ON" in signal else 'green' if "OFF" in signal else 'yellow'
+    ax1.text(0.02, 0.95, f"SIGNAL: {signal}", transform=ax1.transAxes, 
+             fontsize=12, fontweight='bold', color=color_code, 
+             bbox=dict(facecolor='black', alpha=0.7, edgecolor=color_code))
+
+    # Plot 2: MACD
+    ax2.plot(plot_data.index, plot_data['MACD'], label='MACD', color='lime')
+    ax2.plot(plot_data.index, plot_data['MACD_Signal'], label='Signal', color='red')
+    ax2.bar(plot_data.index, plot_data['MACD_Hist'], color='gray', alpha=0.3)
+    ax2.axhline(0, color='white', linewidth=0.5, alpha=0.5)
+    ax2.set_ylabel('MACD')
+    ax2.legend(loc='lower right', fontsize='small')
+
+    # Plot 3: RSI
+    ax3.plot(plot_data.index, plot_data['RSI'], label='RSI (14)', color='yellow')
+    ax3.axhline(70, color='red', linestyle='--', alpha=0.5)
+    ax3.axhline(30, color='green', linestyle='--', alpha=0.5)
+    ax3.axhline(50, color='white', linestyle='-', alpha=0.3)
+    ax3.set_ylabel('RSI')
+    ax3.set_ylim(0, 100)
+    
+    plt.tight_layout()
+    plt.show()
+
+print("Hedge Signal Visuals Generated.")
